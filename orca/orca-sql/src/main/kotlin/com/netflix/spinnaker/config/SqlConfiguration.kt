@@ -60,7 +60,7 @@ import org.springframework.context.annotation.Primary
 
 @Configuration
 @ConditionalOnProperty("sql.enabled")
-@EnableConfigurationProperties(OrcaSqlProperties::class, ExecutionCompressionProperties::class, PipelineRefProperties::class)
+@EnableConfigurationProperties(OrcaSqlProperties::class, ExecutionCompressionProperties::class, PipelineRefProperties::class, SqlHealthcheckActivatorProperties::class)
 @Import(DefaultSqlConfiguration::class)
 @ComponentScan("com.netflix.spinnaker.orca.sql")
 
@@ -139,8 +139,13 @@ class SqlConfiguration {
     SqlActiveExecutionsMonitor(executionRepository, registry, refreshFrequencyMs)
 
   @Bean
-  fun sqlHealthcheckActivator(dsl: DSLContext, registry: Registry) =
-    SqlHealthcheckActivator(dsl, registry)
+  fun sqlHealthcheckActivator(
+    dsl: DSLContext,
+    registry: Registry,
+    dataSource: DataSource,
+    properties: SqlHealthcheckActivatorProperties,
+    sqlProperties: SqlProperties
+  ) = SqlHealthcheckActivator(dsl, registry, dataSource, properties, sqlProperties)
 
   @Bean("dbHealthIndicator")
   fun dbHealthIndicator(

@@ -16,6 +16,11 @@
 package com.netflix.spinnaker.orca.sql
 
 import com.netflix.spectator.api.NoopRegistry
+import com.netflix.spinnaker.config.SqlHealthcheckActivatorProperties
+import com.netflix.spinnaker.kork.sql.config.ConnectionPoolProperties
+import com.netflix.spinnaker.kork.sql.config.SqlProperties
+import com.zaxxer.hikari.HikariDataSource
+import com.zaxxer.hikari.HikariPoolMXBean
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.isA
@@ -37,18 +42,94 @@ class SqlHealthcheckQueueActivatorTest : JUnit5Minutests {
 
     val dslContext = mock<DSLContext>()
     val query = mock<DeleteUsingStep<*>>()
+    val dataSource = mock<HikariDataSource>()
+    val hikariPool = mock<HikariPoolMXBean>()
 
-    after {
-      reset(dslContext, query)
+    // Create a mock SqlProperties with default connection pool
+    val sqlProperties = SqlProperties().apply {
+      connectionPools = mutableMapOf(
+        "default" to ConnectionPoolProperties().apply {
+          minIdle = 10
+          maxPoolSize = 100
+          default = true
+        }
+      )
     }
 
-    context("a healthy current state") {
-      val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), unhealthyThreshold = 1).apply {
-        _enabled.set(true)
+    after {
+      reset(dslContext, query, dataSource, hikariPool)
+    }
+
+    context("basic health check functionality") {
+      val properties = SqlHealthcheckActivatorProperties().apply {
+        unhealthyThreshold = 1
+        healthyThreshold = 1
       }
 
-      test("successive write failures") {
+      test("successive write failures disable activator") {
+        whenever(dataSource.hikariPoolMXBean) doReturn hikariPool
+        whenever(hikariPool.totalConnections) doReturn 10
+        whenever(hikariPool.activeConnections) doReturn 5
+        whenever(hikariPool.idleConnections) doReturn 5
+        whenever(hikariPool.threadsAwaitingConnection) doReturn 0
         whenever(dslContext.delete(isA<Table<*>>())) doThrow RuntimeException("oh no")
+
+        val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), dataSource, properties, sqlProperties).apply {
+          enabledAtomic.set(true)
+          initialWarmupCompleteAtomic.set(true)
+        }
+
+        subject.performWrite()
+
+        expectThat(subject.enabled).isFalse()
+      }
+
+      test("successive write successes enable activator") {
+        whenever(dataSource.hikariPoolMXBean) doReturn hikariPool
+        whenever(hikariPool.totalConnections) doReturn 10
+        whenever(hikariPool.activeConnections) doReturn 5
+        whenever(hikariPool.idleConnections) doReturn 5
+        whenever(hikariPool.threadsAwaitingConnection) doReturn 0
+        whenever(dslContext.delete(isA<Table<*>>())) doReturn query
+
+        val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), dataSource, properties, sqlProperties).apply {
+          enabledAtomic.set(false)
+        }
+
+        subject.performWrite()
+
+        expectThat(subject.enabled).isTrue()
+      }
+    }
+
+    context("initial warmup - minIdle check") {
+      val properties = SqlHealthcheckActivatorProperties().apply {
+        unhealthyThreshold = 2
+        healthyThreshold = 2
+      }
+
+      test("blocks enable until minIdle connections are established") {
+        // Update sqlProperties for this test
+        val testSqlProperties = SqlProperties().apply {
+          connectionPools = mutableMapOf(
+            "default" to ConnectionPoolProperties().apply {
+              minIdle = 300
+              maxPoolSize = 600
+              default = true
+            }
+          )
+        }
+
+        whenever(dataSource.hikariPoolMXBean) doReturn hikariPool
+        whenever(hikariPool.totalConnections) doReturn 150  // Only 150 out of 300
+        whenever(hikariPool.activeConnections) doReturn 50
+        whenever(hikariPool.idleConnections) doReturn 100
+        whenever(hikariPool.threadsAwaitingConnection) doReturn 0
+        whenever(dslContext.delete(isA<Table<*>>())) doReturn query
+
+        val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), dataSource, properties, testSqlProperties).apply {
+          enabledAtomic.set(false)
+        }
 
         subject.performWrite()
         subject.performWrite()
@@ -57,17 +138,61 @@ class SqlHealthcheckQueueActivatorTest : JUnit5Minutests {
       }
     }
 
-    context("an unhealthy sql connection") {
-      val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), healthyThreshold = 1).apply {
-        _enabled.set(false)
+    context("threshold configuration") {
+      test("uses configured unhealthy threshold") {
+        val properties = SqlHealthcheckActivatorProperties().apply {
+          unhealthyThreshold = 3
+          healthyThreshold = 1
+        }
+
+        whenever(dataSource.hikariPoolMXBean) doReturn hikariPool
+        whenever(hikariPool.totalConnections) doReturn 10
+        whenever(hikariPool.activeConnections) doReturn 5
+        whenever(hikariPool.idleConnections) doReturn 5
+        whenever(hikariPool.threadsAwaitingConnection) doReturn 0
+        whenever(dslContext.delete(isA<Table<*>>())) doThrow RuntimeException("failure")
+
+        val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), dataSource, properties, sqlProperties).apply {
+          enabledAtomic.set(true)
+          initialWarmupCompleteAtomic.set(true)
+        }
+
+        // First two failures shouldn't disable (threshold is 3)
+        subject.performWrite()
+        expectThat(subject.enabled).isTrue()
+        subject.performWrite()
+        expectThat(subject.enabled).isTrue()
+
+        // Third failure should disable
+        subject.performWrite()
+        expectThat(subject.enabled).isFalse()
       }
 
-      test("successive write failures") {
+      test("uses configured healthy threshold") {
+        val properties = SqlHealthcheckActivatorProperties().apply {
+          unhealthyThreshold = 1
+          healthyThreshold = 3
+        }
+
+        whenever(dataSource.hikariPoolMXBean) doReturn hikariPool
+        whenever(hikariPool.totalConnections) doReturn 10
+        whenever(hikariPool.activeConnections) doReturn 5
+        whenever(hikariPool.idleConnections) doReturn 5
+        whenever(hikariPool.threadsAwaitingConnection) doReturn 0
         whenever(dslContext.delete(isA<Table<*>>())) doReturn query
 
-        subject.performWrite()
-        subject.performWrite()
+        val subject = SqlHealthcheckActivator(dslContext, NoopRegistry(), dataSource, properties, sqlProperties).apply {
+          enabledAtomic.set(false)
+        }
 
+        // First two successes shouldn't enable (threshold is 3)
+        subject.performWrite()
+        expectThat(subject.enabled).isFalse()
+        subject.performWrite()
+        expectThat(subject.enabled).isFalse()
+
+        // Third success should enable
+        subject.performWrite()
         expectThat(subject.enabled).isTrue()
       }
     }
