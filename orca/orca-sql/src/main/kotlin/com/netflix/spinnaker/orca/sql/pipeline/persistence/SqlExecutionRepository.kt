@@ -1217,7 +1217,7 @@ class SqlExecutionRepository(
 
     if (enableCompression) {
       // Conditionally handle body compression
-      log.debug("Attempting to compress the body before upsertion into ${table.name} with id $id")
+      log.debug("Attempting to compress the body before upsertion into {} with id {}", table.name, id)
       val compressedBody = getCompressedBody(id, body)
 
       if (compressedBody != null) {
@@ -1238,7 +1238,7 @@ class SqlExecutionRepository(
       }
     }
 
-    log.info("Upserting execution into the ${table.name} table with id $id")
+    log.debug("Upserting execution into the {} table with id {}", table.name, id)
     upsert(ctx,
       table,
       updatedInsertPairs,
@@ -1247,8 +1247,7 @@ class SqlExecutionRepository(
 
     if (isBodyCompressed) {
       val compressedExecTable = table.compressedExecTable
-      log.info("Upserting compressed execution into the ${compressedExecTable.name} table " +
-        "with id $id")
+      log.debug("Upserting compressed execution into the {} table with id {}", compressedExecTable.name, id)
       upsert(ctx,
         table.compressedExecTable,
         compressedExecTablePairs,

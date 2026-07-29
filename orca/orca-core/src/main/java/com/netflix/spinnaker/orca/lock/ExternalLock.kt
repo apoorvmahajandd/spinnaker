@@ -192,8 +192,7 @@ class NoOpRunOnLockAcquired : RunOnLockAcquired {
       log.debug("Execution with no locking for key: {} successful", keyName)
       RunOnLockResult(lockAcquired = true, actionExecuted = true)
     } catch (e: Exception) {
-      log.error("An exception was thrown while executing action with no locking for key: {}", keyName)
-      log.error(e.message)
+      log.error("An exception was thrown while executing action with no locking for key: {}", keyName, e)
       RunOnLockResult(exception = e)
     }
   }
@@ -202,6 +201,7 @@ class NoOpRunOnLockAcquired : RunOnLockAcquired {
     return try {
       RunOnLockResult(lockAcquired = true, actionExecuted = true, result = action.call())
     } catch (e: Exception) {
+      log.error("An exception was thrown while executing action with no locking for key: {}", keyName, e)
       RunOnLockResult(exception = e)
     }
   }
