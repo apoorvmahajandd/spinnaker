@@ -218,12 +218,28 @@ public class DefaultOrchestrationProcessor implements OrchestrationProcessor {
             TaskRepository.threadLocalTask.set(task);
             List<Object> results = new ArrayList<>();
             boolean failed = false;
-            for (AtomicOperation atomicOperation : atomicOperations) {
+            // Written together with the COMPLETED state (one history row) rather than as a
+            // separate row.
+            String[] completionStatus = {null};
+            int lastOpIndex = atomicOperations.size() - 1;
+            for (int opIndex = 0; opIndex < atomicOperations.size(); opIndex++) {
+              AtomicOperation atomicOperation = atomicOperations.get(opIndex);
+              boolean lastOp = opIndex == lastOpIndex;
               Id thisOp =
                   atomicOperationId.withTag(
                       "OperationType", atomicOperation.getClass().getSimpleName());
-              task.updateStatus(
-                  TASK_PHASE, "Processing op: " + atomicOperation.getClass().getSimpleName());
+              if (opIndex == 0) {
+                log.info(
+                    "Processing op: {} (task: {})",
+                    atomicOperation.getClass().getSimpleName(),
+                    task.getId());
+              } else {
+                // Kept as a status write for later ops: stores that reject updates to a failed
+                // task throw here, which preserves the existing fail-fast after an earlier
+                // operation fails.
+                task.updateStatus(
+                    TASK_PHASE, "Processing op: " + atomicOperation.getClass().getSimpleName());
+              }
               try {
                 TimedCallable.forCallable(
                         registry,
@@ -270,6 +286,8 @@ public class DefaultOrchestrationProcessor implements OrchestrationProcessor {
                                   task.updateStatus(
                                       TASK_PHASE,
                                       "Orchestration completed with errors, see prior task logs.");
+                                } else if (lastOp) {
+                                  completionStatus[0] = "Orchestration completed.";
                                 } else {
                                   task.updateStatus(TASK_PHASE, "Orchestration completed.");
                                 }
@@ -347,7 +365,11 @@ public class DefaultOrchestrationProcessor implements OrchestrationProcessor {
             if (!failed) {
               task.addResultObjects(nonNull(results));
               if (task.getStatus() == null || !task.getStatus().isCompleted()) {
-                task.complete();
+                if (completionStatus[0] != null) {
+                  task.complete(TASK_PHASE, completionStatus[0]);
+                } else {
+                  task.complete();
+                }
               }
             }
             registry.counter(tasksId.withTag("success", "true")).increment();

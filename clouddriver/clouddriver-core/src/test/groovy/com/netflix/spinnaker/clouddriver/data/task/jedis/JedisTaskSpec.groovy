@@ -86,6 +86,42 @@ class JedisTaskSpec extends Specification {
     0 * _
   }
 
+  void 'completing with a phase and status writes the status entry and the completed copy'() {
+    when:
+    task.complete('orchestration', 'Orchestration completed.')
+
+    then:
+    1 * repository.currentState(task) >> initialState
+    1 * repository.addToHistory({
+      assert it.phase == 'orchestration'
+      assert it.status == 'Orchestration completed.'
+      assert it.state == TaskState.STARTED
+    }, task)
+    1 * repository.currentState(task) >> new DefaultTaskStatus('orchestration', 'Orchestration completed.', TaskState.STARTED)
+    1 * repository.addToHistory({
+      assert it.phase == 'orchestration'
+      assert it.status == 'Orchestration completed.'
+      assert it.state == TaskState.COMPLETED
+    }, task)
+    0 * _
+  }
+
+  void 'task history still ends with the given status after completing with a phase and status'() {
+    given:
+    List<Status> stored = [initialState]
+    repository.currentState(task) >> { stored.last() }
+    repository.addToHistory(_, task) >> { Status s, t -> stored << s }
+    repository.getHistory(task) >> { new ArrayList<Status>(stored) }
+
+    when:
+    task.complete('orchestration', 'Orchestration completed.')
+
+    then:
+    task.status.isCompleted()
+    task.history.last().phase == 'orchestration'
+    task.history.last().status == 'Orchestration completed.'
+  }
+
   void 'failing the status of a task saves it to Jedis'() {
     when:
     task.fail()

@@ -47,6 +47,17 @@ public interface Task {
   void complete();
 
   /**
+   * Records a final status message and completes the task. Equivalent to {@link
+   * #updateStatus(String, String)} followed by {@link #complete()}. Implementations may persist
+   * this as a single history entry (state COMPLETED) rather than the two the default writes; in
+   * either case the last entry of {@link #getHistory()} carries the given phase and status.
+   */
+  default void complete(String phase, String status) {
+    updateStatus(phase, status);
+    complete();
+  }
+
+  /**
    * This method will fail the task and will represent completed = true and failed = true from the
    * Task's {@link #getStatus()} method.
    *

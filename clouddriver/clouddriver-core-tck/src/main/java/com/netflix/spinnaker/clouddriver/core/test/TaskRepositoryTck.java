@@ -162,6 +162,25 @@ public abstract class TaskRepositoryTck<T extends TaskRepository> {
   }
 
   @Test
+  public void testTaskCompletionWithStatusEndsHistoryWithThatStatus() {
+    Task task = subject.create("TEST", "Test Status");
+    task.complete("Orchestration", "Orchestration completed.");
+
+    assertThat(task.getStatus().isCompleted()).isTrue();
+    assertThat(task.getStatus().isFailed()).isFalse();
+    assertThat(task.getStatus().getPhase()).isEqualTo("Orchestration");
+    assertThat(task.getStatus().getStatus()).isEqualTo("Orchestration completed.");
+
+    // Implementations may persist this as one row or two (a status row plus a COMPLETED copy that
+    // getHistory() hides), but the last visible history entry must be the given status either way.
+    List<? extends Status> history = task.getHistory();
+    assertThat(history).isNotEmpty();
+    Status last = history.get(history.size() - 1);
+    assertThat(last.getPhase()).isEqualTo("Orchestration");
+    assertThat(last.getStatus()).isEqualTo("Orchestration completed.");
+  }
+
+  @Test
   public void testListRunningTasks() {
     Task t1 = subject.create("TEST", "Test Status");
     Task t2 = subject.create("TEST", "Test Status");

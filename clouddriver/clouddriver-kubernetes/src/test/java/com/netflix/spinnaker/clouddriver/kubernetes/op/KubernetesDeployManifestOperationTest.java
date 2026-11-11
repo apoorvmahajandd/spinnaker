@@ -64,6 +64,7 @@ import com.netflix.spinnaker.moniker.Namer;
 import io.kubernetes.client.openapi.models.V1DeleteOptions;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -314,6 +315,72 @@ final class KubernetesDeployManifestOperationTest {
     assertThat(result.getCreatedArtifacts().size()).isEqualTo(2);
     assertThat(result.getCreatedArtifacts().stream().map(Artifact::getReference))
         .containsExactlyInAnyOrder("myconfig-v000", "my-name-v000");
+  }
+
+  private static List<String> taskStatuses() {
+    // Skip the initial "Creating task" entry that DefaultTask writes on construction.
+    return TaskRepository.threadLocalTask.get().getHistory().stream()
+        .skip(1)
+        .map(status -> status.getStatus())
+        .collect(Collectors.toList());
+  }
+
+  private static void assertNoRemovedTaskLines(List<String> statuses) {
+    assertThat(statuses)
+        .noneMatch(
+            s ->
+                s.startsWith("Binding artifacts in")
+                    || s.startsWith("Bound artifacts: ")
+                    || s.startsWith("Annotating manifest")
+                    || s.startsWith("Submitting manifest")
+                    || s.startsWith("Finding deployer for")
+                    || s.equals("Sorting manifests by priority...")
+                    || s.equals("Checking if all requested artifacts were bound..."));
+  }
+
+  @Test
+  void deployWritesOnlyBeginningOrderAndCompletionTaskStatuses() {
+    KubernetesDeployManifestDescription description = baseDeployDescription("deploy/configmap.yml");
+
+    deploy(description);
+
+    List<String> statuses = taskStatuses();
+    // Beginning, Deploy order, one completed line per manifest (1), completed for all manifests.
+    assertThat(statuses).hasSize(2 + 1 + 1);
+    assertThat(statuses.get(0)).startsWith("Beginning deployment of manifests");
+    assertThat(statuses.get(1)).startsWith("Deploy order is: ");
+    assertThat(statuses.stream().filter(s -> s.startsWith("Deploy manifest task completed")))
+        .hasSize(2);
+    assertNoRemovedTaskLines(statuses);
+  }
+
+  @Test
+  void boundArtifactsAreWrittenToTaskOnlyForManifestsThatBoundSomething() {
+    KubernetesDeployManifestDescription description =
+        baseDeployDescription("deploy/replicaset-configmap.yml");
+    description.setEnableArtifactBinding(true);
+    description.setRequiredArtifacts(
+        ImmutableList.of(
+            Artifact.builder()
+                .name("index.docker.io/library/nginx")
+                .type("docker/image")
+                .reference("index.docker.io/library/nginx:required")
+                .build()));
+
+    deploy(description);
+
+    List<String> statuses = taskStatuses();
+    List<String> bound =
+        statuses.stream()
+            .filter(s -> s.startsWith("Bound artifacts in"))
+            .collect(Collectors.toList());
+    assertThat(bound).hasSize(1);
+    assertThat(bound.get(0))
+        .startsWith("Bound artifacts in replicaSet my-name")
+        .contains("index.docker.io/library/nginx:required");
+    // Beginning, Deploy order, one bound line, one completed line per manifest (2), completed all.
+    assertThat(statuses).hasSize(2 + 1 + 2 + 1);
+    assertNoRemovedTaskLines(statuses);
   }
 
   @Test

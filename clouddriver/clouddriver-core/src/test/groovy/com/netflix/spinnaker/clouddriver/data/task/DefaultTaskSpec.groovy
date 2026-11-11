@@ -68,6 +68,28 @@ class DefaultTaskSpec extends Specification {
     thrown IllegalStateException
   }
 
+  void "complete with phase and status writes a single completed history entry"() {
+    given:
+    task.updateStatus "TEST", "Working"
+    int before = task.history.size()
+
+    when:
+    task.complete "TEST", "Orchestration completed."
+
+    then:
+    task.status.isCompleted()
+    !task.status.isFailed()
+    task.status.phase == "TEST"
+    task.status.status == "Orchestration completed."
+    task.history.size() == before + 1
+
+    when:
+    task.complete "TEST", "again"
+
+    then:
+    thrown IllegalStateException
+  }
+
   void "failing a task completes it too"() {
     given:
     task.fail()

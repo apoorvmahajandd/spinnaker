@@ -109,12 +109,9 @@ public class KubernetesDeployManifestOperation implements AtomicOperation<Operat
                   // coming from the request
                   allArtifacts.put(getArtifactKey(artifact), artifact);
 
-                  getTask()
-                      .updateStatus(
-                          OP_NAME,
-                          "Annotating manifest "
-                              + manifest.getFullResourceName()
-                              + " with artifact, relationships & moniker...");
+                  log.info(
+                      "Annotating manifest {} with artifact, relationships & moniker...",
+                      manifest.getFullResourceName());
                   KubernetesManifestAnnotater.annotateManifest(manifest, artifact);
 
                   KubernetesHandler deployer = properties.getHandler();
@@ -166,12 +163,10 @@ public class KubernetesDeployManifestOperation implements AtomicOperation<Operat
           KubernetesResourceProperties properties = findResourceProperties(holder.manifest);
           KubernetesManifestStrategy strategy = holder.strategy;
           KubernetesHandler deployer = properties.getHandler();
-          getTask()
-              .updateStatus(
-                  OP_NAME,
-                  "Submitting manifest "
-                      + holder.manifest.getFullResourceName()
-                      + " to kubernetes master...");
+          log.info(
+              "Submitting manifest {} to kubernetes master (task: {})...",
+              holder.manifest.getFullResourceName(),
+              getTask().getId());
           result.merge(
               deployer.deploy(
                   credentials,
@@ -272,23 +267,32 @@ public class KubernetesDeployManifestOperation implements AtomicOperation<Operat
       KubernetesManifest manifest,
       Collection<Artifact> artifacts,
       OperationResult operationResult) {
-    getTask()
-        .updateStatus(OP_NAME, "Binding artifacts in " + manifest.getFullResourceName() + "...");
+    log.info("Binding artifacts in {}...", manifest.getFullResourceName());
 
     ReplaceResult replaceResult =
         findResourceProperties(manifest)
             .getHandler()
             .replaceArtifacts(manifest, List.copyOf(artifacts), description.getAccount());
 
-    getTask()
-        .updateStatus(OP_NAME, "Bound artifacts: " + replaceResult.getBoundArtifacts() + "...");
+    if (replaceResult.getBoundArtifacts().isEmpty()) {
+      log.info("Bound artifacts in {}: []...", manifest.getFullResourceName());
+    } else {
+      getTask()
+          .updateStatus(
+              OP_NAME,
+              "Bound artifacts in "
+                  + manifest.getFullResourceName()
+                  + ": "
+                  + replaceResult.getBoundArtifacts()
+                  + "...");
+    }
 
     operationResult.getBoundArtifacts().addAll(replaceResult.getBoundArtifacts());
     return replaceResult.getManifest();
   }
 
   private void checkIfArtifactsBound(OperationResult operationResult) {
-    getTask().updateStatus(OP_NAME, "Checking if all requested artifacts were bound...");
+    log.info("Checking if all requested artifacts were bound...");
     if (description.isEnableArtifactBinding()) {
       Set<ArtifactKey> unboundArtifacts =
           Sets.difference(
@@ -307,7 +311,7 @@ public class KubernetesDeployManifestOperation implements AtomicOperation<Operat
   }
 
   private void sortManifests(List<KubernetesManifest> manifests) {
-    getTask().updateStatus(OP_NAME, "Sorting manifests by priority...");
+    log.info("Sorting manifests by priority...");
     manifests.sort(
         Comparator.comparingInt(m -> findResourceProperties(m).getHandler().deployPriority()));
     getTask()
@@ -425,7 +429,7 @@ public class KubernetesDeployManifestOperation implements AtomicOperation<Operat
   @Nonnull
   private KubernetesResourceProperties findResourceProperties(KubernetesManifest manifest) {
     KubernetesKind kind = manifest.getKind();
-    getTask().updateStatus(OP_NAME, "Finding deployer for " + kind + "...");
+    log.info("Finding deployer for {}...", kind);
     return credentials.getResourcePropertyRegistry().get(kind);
   }
 

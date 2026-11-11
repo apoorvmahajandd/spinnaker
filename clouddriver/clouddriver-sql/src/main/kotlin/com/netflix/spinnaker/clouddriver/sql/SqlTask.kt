@@ -93,6 +93,12 @@ class SqlTask(
     log.debug("Set task {} as complete", id)
   }
 
+  override fun complete(phase: String, status: String) {
+    this.dirty.set(true)
+    repository.completeWithStatus(this, phase, status)
+    log.debug("Set task {} as complete phase={} status={}", id, phase, status)
+  }
+
   override fun fail() {
     this.dirty.set(true)
     repository.updateState(this, TaskState.FAILED)

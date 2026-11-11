@@ -175,6 +175,20 @@ class SqlTaskRepository @JvmOverloads constructor(
     }
   }
 
+  internal fun completeWithStatus(task: Task, phase: String, status: String) {
+    withPool(poolName) {
+      jooq.transactional(retries) { ctx ->
+        val row = lockTask(ctx, task.id)
+        // Throws if the task has already reached a terminal state.
+        val updated = currentStatus(ctx, task.id, row)
+          .update(phase, status.take(MAX_STATUS_LENGTH))
+          .update(TaskState.COMPLETED)
+        insertState(ctx, task.id, row.nextSeq, updated.state, updated.phase, updated.status)
+        updateTaskRow(ctx, task.id, row.nextSeq + 1, updated.state)
+      }
+    }
+  }
+
   internal fun updateState(task: Task, state: TaskState) {
     withPool(poolName) {
       jooq.transactional(retries) { ctx ->

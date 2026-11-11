@@ -20,7 +20,10 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.NoopRegistry
 import com.netflix.spinnaker.clouddriver.config.ExceptionClassifierConfigurationProperties
 import com.netflix.spinnaker.clouddriver.data.task.DefaultTask
+import com.netflix.spinnaker.clouddriver.data.task.DefaultTaskStatus
 import com.netflix.spinnaker.clouddriver.data.task.SagaId
+import com.netflix.spinnaker.clouddriver.data.task.Task
+import com.netflix.spinnaker.clouddriver.data.task.TaskState
 import com.netflix.spinnaker.clouddriver.data.task.TaskRepository
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.web.context.AuthenticatedRequestContextProvider
@@ -93,6 +96,120 @@ class DefaultOrchestrationProcessorSpec extends Specification {
     1 * taskRepository.create(_, _, taskKey) >> task
     task.status.isCompleted()
     !task.status.isFailed()
+  }
+
+  void "single op success writes one completed history entry and no Processing op row"() {
+    setup:
+    def task = new DefaultTask("1")
+    def atomicOperation = Mock(AtomicOperation)
+
+    when:
+    submitAndWait atomicOperation
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    task.status.isCompleted()
+    task.status.phase == "ORCHESTRATION"
+    task.status.status == "Orchestration completed."
+    task.history*.status == ["Creating task 1", "Orchestration completed."]
+    !task.history*.status.any { it.startsWith("Processing op: ") }
+  }
+
+  void "single op success calls complete(phase, status) and does not separately update status"() {
+    setup:
+    def task = Spy(DefaultTask, constructorArgs: ["1"])
+    def atomicOperation = Mock(AtomicOperation)
+
+    when:
+    submitAndWait atomicOperation
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    1 * atomicOperation.operate(_) >> "result"
+    0 * task.updateStatus(_, _)
+    then:
+    1 * task.addResultObjects(["result"])
+    then:
+    1 * task.complete("ORCHESTRATION", "Orchestration completed.")
+    0 * task.complete()
+  }
+
+  void "with multiple ops only the last op's completion message is merged into the completed state"() {
+    setup:
+    def task = Spy(DefaultTask, constructorArgs: ["1"])
+    def op1 = Mock(AtomicOperation)
+    def op2 = Mock(AtomicOperation)
+
+    when:
+    submitAndWait([op1, op2])
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    1 * op1.operate(_) >> "r1"
+    1 * task.updateStatus("ORCHESTRATION", "Orchestration completed.")
+    then:
+    1 * task.updateStatus("ORCHESTRATION", { it.startsWith("Processing op: ") })
+    then:
+    1 * op2.operate(_) >> "r2"
+    then:
+    1 * task.addResultObjects(["r1", "r2"])
+    then:
+    1 * task.complete("ORCHESTRATION", "Orchestration completed.")
+    0 * task.updateStatus(_, _)
+    0 * task.complete()
+  }
+
+  void "two successful ops write exactly one Processing op entry, for the second op"() {
+    setup:
+    def task = new DefaultTask("1")
+    def op1 = Mock(AtomicOperation)
+    def op2 = Mock(AtomicOperation)
+
+    when:
+    submitAndWait([op1, op2])
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    task.status.isCompleted()
+    task.history*.status.count { it.startsWith("Processing op: ") } == 1
+    task.history*.status.indexOf("Orchestration completed.") <
+      task.history*.status.findIndexOf { it.startsWith("Processing op: ") }
+  }
+
+  void "a later operation does not run after an earlier one fails the task"() {
+    setup:
+    def task = new DefaultTask("1")
+    def op1 = Mock(AtomicOperation)
+    def op2 = Mock(AtomicOperation)
+
+    when:
+    submitAndWait([op1, op2])
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    1 * op1.operate(_) >> { throw new RuntimeException("boom") }
+    0 * op2.operate(_)
+    task.status.isFailed()
+  }
+
+  void "an op that leaves the task failed writes completed-with-errors via updateStatus and never completes"() {
+    setup:
+    def failed = new DefaultTaskStatus("p", "s", TaskState.FAILED)
+    def task = Mock(Task) {
+      getId() >> "1"
+      getStatus() >> failed
+    }
+    def atomicOperation = Mock(AtomicOperation)
+
+    when:
+    submitAndWait atomicOperation
+
+    then:
+    1 * taskRepository.create(_, _, taskKey) >> task
+    1 * atomicOperation.operate(_) >> null
+    1 * task.updateStatus("ORCHESTRATION", "Orchestration completed with errors, see prior task logs.")
+    0 * task.complete(_, _)
+    0 * task.complete()
   }
 
   @Unroll

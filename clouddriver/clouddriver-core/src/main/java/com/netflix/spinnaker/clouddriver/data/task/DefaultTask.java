@@ -43,6 +43,13 @@ public class DefaultTask implements Task {
     statusHistory.addLast(currentStatus().update(TaskState.COMPLETED));
   }
 
+  @Override
+  public void complete(String phase, String status) {
+    currentStatus().ensureUpdateable();
+    statusHistory.addLast(DefaultTaskStatus.create(phase, status, TaskState.COMPLETED));
+    log.info("[" + phase + "] - Task: " + id + " " + status);
+  }
+
   public List<? extends Status> getHistory() {
     return statusHistory.stream().map(TaskDisplayStatus::new).collect(Collectors.toList());
   }
